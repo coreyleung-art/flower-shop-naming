@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flower-shop-naming"
+version = "2.0.0"
+description = "花店物品命名标准化CLI工具 - 将电商平台商品名称转换为标准命名格式"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Corey Leung", email = "coreyleung@example.com"}
+]
+keywords = ["flower", "shop", "naming", "standard", "cli", "花店", "命名", "标准化"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business",
+    "Topic :: Text Processing :: Linguistic",
+]
+
+[project.scripts]
+flower-naming = "item_naming_cli:main"
+
+[project.urls]
+Homepage = "https://github.com/coreyleung-art/flower-shop-naming"
+Repository = "https://github.com/coreyleung-art/flower-shop-naming"
+Issues = "https://github.com/coreyleung-art/flower-shop-naming/issues"

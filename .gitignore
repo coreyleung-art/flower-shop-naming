@@ -1,0 +1,35 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Local config
+.env
+*.local
+
+# Business files (not for this repo)
+*.doc
+*.docx
+*.xlsx
+*.xls
+*.pdf
+*.xmind
+*.jpg
+*.png
+花店数据/
+花艺课程相关/
+财务管理/

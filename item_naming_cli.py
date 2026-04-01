@@ -28,6 +28,7 @@ CATEGORY_KEYWORDS = {
         '防水纸', '珠光纸', '云龙纸', '莫奈', '肌理纸',
         '蝴蝶纸', '翅膀纸', '锦衣纸', '羽毛纸', '蕾丝纸',
         '压纹纸', '圆点纸', '波卡尔', '波点纸', '格子纸', '条纹纸', '印花纸',
+        '造型纸', '硬卡纸', '卡纸', '彩色纸',
     ],
     # 丝带
     '花艺资材-丝带捆绑类耗材': [
@@ -81,7 +82,7 @@ CATEGORY_KEYWORDS = {
         '扭扭棒', '手工花', '年宵花', 'DIY花束',
     ],
     # 工具
-    '五金工具': ['剪刀', '花泥刀', '打刺夹', '工具', '美工刀', '削皮刀', '钳子', '铁丝'],
+    '五金工具': ['剪刀', '花泥刀', '打刺夹', '工具', '美工刀', '削皮刀', '钳子', '铁丝', '理花神器', '齿扒', '花扒', '扒子', '花艺工具'],
     # 道具
     '道具': ['展示道具', '装饰道具', '羽毛', '鸵鸟毛', '展示架', '花架', '陈列道具'],
     # 行政
@@ -149,7 +150,7 @@ COLOR_MAPPING = {
     '白釉': '白釉', '黑釉': '黑釉', '红釉': '红釉', '蓝釉': '蓝釉',
     '影青': '影青釉', '天青': '天青釉', '汝窑': '汝窑釉', '哥窑': '哥窑釉',
     # 材质色
-    '木色': '原木色', '原木': '原木色', '竹': '竹色',
+    '木色': '原木色', '原木': '原木色', '竹': '竹色', '牛皮色': '牛皮色', '牛皮': '牛皮色',
     # 特殊
     '彩色': '彩色', '混色': '混色', '多色': '彩色',
 }
@@ -336,8 +337,8 @@ class ItemNamingReviewer:
         if qty_match:
             spec['quantity'] = f'{qty_match.group(1)}支/扎'
 
-        # 提取尺寸 XX*XXcm 或 XX*XX*XXcm 或 XX*XX*XX（无单位）
-        size_match = re.search(r'(\d+)[*x×](\d+)(?:[*x×](\d+))?\s*(?:cm)?', name, re.IGNORECASE)
+        # 提取尺寸 XX*XXcm 或 XX*XX*XXcm 或 XXcm*XXcm 或 XX*XX*XX（无单位）
+        size_match = re.search(r'(\d+)\s*(?:cm)?\s*[*x×]\s*(\d+)\s*(?:cm)?(?:\s*[*x×]\s*(\d+)\s*(?:cm)?)?', name, re.IGNORECASE)
         if size_match:
             if size_match.group(3):
                 spec['size'] = f'{size_match.group(1)}*{size_match.group(2)}*{size_match.group(3)}cm'
@@ -405,6 +406,16 @@ class ItemNamingReviewer:
         diameter_match = re.search(r'直径\s*(\d+(?:\.\d+)?)\s*(?:cm)?', name, re.IGNORECASE)
         if diameter_match:
             spec['diameter'] = f'直径{diameter_match.group(1)}cm'
+
+        # 提取齿数 X齿
+        teeth_match = re.search(r'(\d+)\s*齿', name)
+        if teeth_match:
+            spec['teeth'] = f'{teeth_match.group(1)}齿'
+
+        # 提取重量 XX克 XXg
+        weight_match = re.search(r'(\d+)\s*(克|g|G)', name)
+        if weight_match:
+            spec['weight'] = f'{weight_match.group(1)}克'
 
         return spec
 
@@ -685,7 +696,9 @@ class ItemNamingReviewer:
             return '花材'
 
         elif category == '五金工具':
-            if '剪刀' in filtered:
+            if any(tool in filtered for tool in ['理花神器', '齿扒', '花扒', '扒子']):
+                return '理花神器'
+            elif '剪刀' in filtered:
                 return '花艺剪刀'
             elif '花泥刀' in filtered:
                 return '花泥刀'
