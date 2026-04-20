@@ -20,6 +20,8 @@ Thumbs.db
 # Local config
 .env
 *.local
+notion_cache.json
+notion_config.json
 
 # Business files (not for this repo)
 *.doc

@@ -8,7 +8,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="flower-shop-naming",
-    version="2.0.0",
+    version="2.19.0",
     author="Corey Leung",
     author_email="coreyleung@example.com",
     description="花店物品命名标准化CLI工具 - 将电商平台商品名称转换为标准命名格式",

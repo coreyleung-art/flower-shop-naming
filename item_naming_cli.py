@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-花店物品命名审查工具 CLI v2.0
+花店物品命名审查工具 CLI v2.18
 用法: python3 item_naming_cli.py "商品原始名称" [--platform 1688|taobao|pdd|huawu]
+
+Notion 集成:
+  --no-cache        跳过缓存，直接从 Notion 获取最新数据
+  --force-refresh   强制刷新缓存
 """
 
 import argparse
 import re
 import json
+import os
+import sys
 from typing import Optional, Dict, List, Tuple
 
 # ========== 配置数据 ==========
@@ -38,7 +44,7 @@ CATEGORY_KEYWORDS = {
     # 花器
     '花艺资材-花器': [
         '花瓶', '花器', '花盆', '醒花桶', '养花桶', '玻璃瓶', '陶瓷瓶', '花插', '剑山',
-        '试管瓶', '吊瓶', '壁挂瓶',
+        '试管瓶', '吊瓶', '壁挂瓶', '抱抱桶',
         '圆肚瓶', '长颈瓶', '梅瓶', '葫芦瓶', '观音瓶', '玉壶春瓶', '天球瓶', '胆瓶',
         '蒜头瓶', '棒槌瓶', '凤尾瓶', '柳叶瓶', '灯笼瓶', '双耳瓶', '盘口瓶',
         '瓶',
@@ -50,14 +56,14 @@ CATEGORY_KEYWORDS = {
     ],
     # 礼盒
     '花艺资材-礼盒/包装盒': [
-        '礼盒', '包装盒', '花盒', '抱抱桶', '手提盒', '鲜花盒', '手捧盒',
+        '礼盒', '包装盒', '花盒', '手提盒', '鲜花盒', '手捧盒',
         '盆栽礼盒', '绿植礼盒', '开业礼盒', '节日礼盒', '花篮', '篮子', '提篮',
     ],
     # 配件道具/摆件
     '花艺资材-玩偶/配件/道具': [
         '玩偶', '招财猫', '配件', '小熊', '蝴蝶结', '珍珠', '摆件', '陶瓷摆件',
         '装饰品', '挂件', '吊坠', '插片', '花艺配件', '婚庆配件', '开业配件',
-        '仿真水果', '仿真蔬菜', '小天使', '爱心', '星星',
+        '仿真水果', '仿真蔬菜', '小天使', '爱心', '星星摆件', '五角星',
         '吉祥物', '生肖', '小马', '布艺马', '金元宝', '福字', '中国结',
     ],
     # 气球
@@ -91,13 +97,56 @@ CATEGORY_KEYWORDS = {
     # ========== 花材类（后匹配）==========
     # 鲜切花
     '鲜切花材': [
-        '玫瑰', '郁金香', '洋桔梗', '康乃馨', '向日葵', '菊花', '百合', '满天星', '紫罗兰',
-        '草花', '绣球', '飞燕草', '牡丹', '洋牡丹', '尤加利', '腊梅', '小手球', '蝴蝶兰', '睡莲',
-        '荷花', '芍药', '鸢尾', '洋甘菊', '雏菊', '翠珠', '蓝星花', '铁线莲', '雪柳',
+        # 主流切花
+        '玫瑰', '多头玫瑰', '月季', '郁金香', '洋桔梗', '康乃馨', '向日葵', '菊花', '百合', '满天星', '紫罗兰',
+        # 满天星品种
+        '染色满天星', '彩色满天星', '浪漫粉', '天空蓝', '星星满天星', '玲珑满天星', '千万星', '百万星', '伊洛斯',
+        # 洋桔梗品种
+        '美人鱼', '蓝利萨', '红镜', 'Maquia', 'Rosina', '露西塔', '惊艳洛丽塔', '维纳斯', '雅尔',
+        '三重唱', '美声', '大乐', '朱颜', '彩风', '火灵鸟', '蜜糖', '小铃铛', '罗曼',
+        # 郁金香品种
+        '重瓣郁金香', '毛边郁金香', '鹦鹉郁金香', '胜利之光', '世界之爱', '冰淇淋', '神秘', '水晶', '火焰', '白色边郁金香',
+        # 百合品种
+        '西伯利亚', '索邦', '索尔邦', '黄天霸', '皇冠', '粉铁炮', '甜蜜赞美诗', '罗宾娜', '普拉芬多', '红福', '艾琳娜', '异国阳光',
+        '柏林百合', '白天使', '木门百合', 'OT百合', 'LO百合', 'LA百合', '美素', '眼线', '特里昂菲特', '卡萨布兰卡',
+        # 其他切花
+        '绣球', '飞燕草', '大飞燕', '小飞燕', '千鸟草', '牡丹', '洋牡丹', '芍药', '鸢尾', '蝴蝶兰', '文心兰',
+        # 秋英类
+        '巧克力秋英', '巧克力波斯菊', '巧克力宇宙', '秋英', '波斯菊', '硫华菊', '红秋英', '粉秋英', '白秋英',
+        # 菊花品种
+        '白菊', '黄菊', '粉菊', '紫菊', '绿菊', '香槟菊', '单头菊', '多头菊', '光面菊', '毛面菊',
+        # 草花类
+        '草花', '洋甘菊', '雏菊', '乒乓菊', '玛格丽特', '格桑花', '翠珠', '蓝星花', '铁线莲',
+        '雪柳', '蕾丝', '龙胆', '薰衣草', '勿忘我', '情人草', '水晶草',
+        # 兰科
+        '洋兰', '剑兰', '石斛兰', '万代兰', '千代兰', '梦香兰', '跳舞兰', '吉祥兰', '卡特兰', '蕙兰', '虾脊兰',
+        # 康乃馨品种
+        '康乃馨', '单头康乃馨', '多头康乃馨', '染色康乃馨', '绿注康乃馨', '红迪康乃馨', '白康乃馨', '粉康乃馨',
+        # 叶材/枝材（移到鲜切叶材）
+        # 特殊花材
+        '睡莲', '荷花', '红掌', '火鹤', '凤梨', '马蹄莲', '海芋', '六出花',
+        # 进口稀有
+        '帝王花', '针垫花', '蓝绣球', '粉绣球', '重瓣绣球', '染色绣球', '复古绣球', '抹茶绣球', '妖精之吻', '佳澄',
+        '花手鞠', '你我一起', '纱织小姐', '蒙娜丽莎', '秋色绣球', '薄荷拇指', '魔幻海洋',
+        # 配材
+        '蓬莱松', '米兰', '银叶菊', '高山积雪', '松虫草', '落新妇',
+        '袋鼠爪', '刺芹', '蛇鞭菊', '星芹', '商陆', '红豆', '绿豆',
+        # 风信子/铃兰
+        '风信子', '铃兰', '葡萄风信子',
     ],
     # 叶材
     '鲜切叶材': [
         '叶材', '散尾葵', '龟背竹', '春羽', '琴叶榕', '橡皮叶', '尤加利叶', '满天星叶',
+        # 尤加利品种
+        '尤加利', '苹果尤加利', '蓝梦尤加利', '银叶尤加利', '心叶尤加利',
+        # 其他叶材
+        '天堂鸟叶', '刺芹叶', '翠扇叶', '雪松叶', '竹叶', '阔叶竹',
+        '侧柏', '扁柏', '清香木', '小米果', '尤加利果', '蔷薇果',
+        '棉花', '芦苇', '狗尾草', '枯枝', '南天竹', '火棘',
+        '小天使', '常春藤', '绿萝叶', '吊兰叶',
+        # 新增叶材品种
+        '十大功劳', '黄杨', '黄杨叶', '龙柳', '龙柳叶',
+        '小米枝', '小米叶', '斑太叶', '斑叶', '纽纹叶', '米针叶',
     ],
     # 仿真花
     '仿真/塑料花材': [
@@ -251,6 +300,536 @@ UNIT_SUGGESTIONS = {
         'options': ['个', '套', '组'],
         'standard_qty': [],
     },
+    '永生花/干花类型': {
+        'default': '支',
+        'options': ['支', '扎', '束'],
+        'standard_qty': ['20支/扎', '10支/扎', '5支/扎'],
+        'bundle_unit': '束',
+        'min_unit': '支',
+        'conversion': {'束': 10},  # 1束 = 10支 (默认换算)
+    },
+}
+
+# 鲜切花材种属映射（花名 -> 种属）
+SPECIES_CATEGORY = {
+    # ========== 蔷薇科 ==========
+    '玫瑰': '玫瑰',
+    '多头玫瑰': '多头玫瑰',  # 特殊：已包含种属，不重复添加
+    '单头玫瑰': '单头玫瑰',  # 特殊：已包含种属，不重复添加
+    '月季': '玫瑰',
+    # 单头玫瑰品种
+    '卡罗拉': '玫瑰',
+    '红玫瑰': '玫瑰',
+    '粉玫瑰': '玫瑰',
+    '白玫瑰': '玫瑰',
+    '黄玫瑰': '玫瑰',
+    '香槟玫瑰': '玫瑰',
+    '戴安娜': '玫瑰',
+    '洛神': '玫瑰',
+    '紫霞': '玫瑰',
+    '冷美人': '玫瑰',
+    '蓝色妖姬': '玫瑰',
+    '黑魔术': '玫瑰',
+    '影星': '玫瑰',
+    '金香玉': '玫瑰',
+    '蜜桃雪山': '玫瑰',
+    '红袖': '玫瑰',
+    '苏醒': '玫瑰',
+    '金辉': '玫瑰',
+    '浪漫宝贝': '玫瑰',
+    '朦胧朱迪': '玫瑰',
+    '紫影': '玫瑰',
+    '紫皇后': '玫瑰',
+    '大桃红': '玫瑰',
+    '彩虹玫瑰': '玫瑰',
+    '迷恋': '玫瑰',
+    '雅典娜': '玫瑰',
+    '榴花秋舞': '玫瑰',
+    '草莓杏仁饼': '玫瑰',  # 月季品种，草莓杏仁饼
+    # 补充更多单头玫瑰品种
+    '法兰西': '玫瑰',        # 又名法国红，卷浪边
+    '法国红': '玫瑰',
+    '糖果': '玫瑰',          # 糖果雪山
+    '糖果雪山': '玫瑰',
+    '粉雪山': '玫瑰',
+    '海洋之歌': '玫瑰',      # 紫色系
+    '海洋': '玫瑰',
+    '衬裙': '玫瑰',
+    '红唇': '玫瑰',
+    '海金香玉': '玫瑰',      # 不同于金香玉
+    '闪耀': '玫瑰',
+    '太阳王': '玫瑰',
+    '如意': '玫瑰',
+    '高原红': '玫瑰',
+    '秀色': '玫瑰',
+    '楼兰': '玫瑰',
+    '阿班斯': '玫瑰',
+    '双色月季': '玫瑰',
+    # 新增单头玫瑰品种
+    '粉荔枝': '玫瑰',      # 热门品种
+    '白荔枝': '玫瑰',      # 热门品种
+    '坦尼克': '玫瑰',      # 白色系
+    '白巧克力': '玫瑰',    # 白色系
+    '杏色蕾丝': '玫瑰',    # 杏色系
+    '凯拉': '玫瑰',        # 肯尼亚进口
+    '凯莉': '玫瑰',        # 粉色系
+    '粉之精': '玫瑰',      # 粉色系
+    '紫之精': '玫瑰',      # 紫色系
+    '自由': '玫瑰',        # 超市常见
+    # 多头玫瑰品种
+    '巧克力泡泡': '多头玫瑰',  # 小头玫瑰，多头
+    '橙色泡泡': '多头玫瑰',
+    '黄色泡泡': '多头玫瑰',
+    '蓝色泡泡': '多头玫瑰',
+    '粉蜡笔': '多头玫瑰',
+    '流星': '多头玫瑰',
+    '霓虹泡泡': '多头玫瑰',
+    '狂欢泡泡': '多头玫瑰',
+    '幻影泡泡': '多头玫瑰',
+    '多洛塔': '多头玫瑰',
+    '丁香泡泡': '多头玫瑰',
+
+    # ========== 百合科 ==========
+    '百合': '百合',
+    '东方百合': '百合',
+    '亚洲百合': '百合',
+    '铁炮百合': '百合',
+    'OT百合': '百合',
+    'LO百合': '百合',
+    'LA百合': '百合',
+    '木门': '百合',
+    '美素': '百合',
+    '眼线': '百合',
+    '特里昂菲特': '百合',
+    '卡萨布兰卡': '百合',
+    '卷丹': '百合',
+    '鹿子百合': '百合',
+    '麝香百合': '百合',
+    '重瓣百合': '百合',
+    # 补充品种
+    '西伯利亚': '百合',     # 白色切花主流品种
+    '索邦': '百合',         # 又名索尔邦，粉色系
+    '索尔邦': '百合',
+    '黄天霸': '百合',        # 黄色系
+    '皇冠': '百合',         # 白色或黄色
+    '粉铁炮': '百合',        # 粉色系
+    '甜蜜赞美诗': '百合',    # 白色系
+    '罗宾娜': '百合',        # 粉色系
+    '普拉芬多': '百合',      # 白色切花
+    '红福': '百合',          # 红色系
+    '艾琳娜': '百合',        # 白色系
+    '异国阳光': '百合',      # 黄色系
+    # 更多百合品种
+    '柏林百合': '百合',      # 白色系
+    '白天使': '百合',        # 白色浓香型
+    '木门百合': '百合',      # 黄色系
+    'OT百合': '百合',        # 东方杂交系
+    'LO百合': '百合',        # 铁炮×东方杂交
+    'LA百合': '百合',        # 铁炮×亚洲杂交
+
+    # ========== 郁金香 ==========
+    '郁金香': '郁金香',
+    '普通郁金香': '郁金香',
+    '重瓣郁金香': '郁金香',
+    '毛边郁金香': '郁金香',
+    '鹦鹉嘴郁金香': '郁金香',
+    '鹦鹉郁金香': '郁金香',
+    '胜利之光': '郁金香',   # 经典品种
+    '世界之爱': '郁金香',   # 红色系
+    '冰淇淋': '郁金香',     # 白色重瓣
+    '神秘': '郁金香',      # 紫色系
+    '水晶': '郁金香',      # 白色
+    '火焰': '郁金香',      # 红色
+    '白色边郁金香': '郁金香',
+
+    # ========== 风信子/铃兰 ==========
+    '风信子': '风信子',
+    '铃兰': '铃兰',
+    '葡萄风信子': '风信子', # 风信子科
+
+    # ========== 菊科 ==========
+    '玛格丽特': '菊花',
+    '菊花': '菊花',
+    '小菊': '菊花',
+    '大菊': '菊花',
+    '雏菊': '菊花',
+    '乒乓菊': '菊花',
+    '洋甘菊': '菊花',
+    '格桑花': '菊花',
+    '小雏菊': '菊花',
+    '非洲菊': '菊花',
+    '白菊': '菊花',
+    '黄菊': '菊花',
+    '粉菊': '菊花',
+    '紫菊': '菊花',
+    '绿菊': '菊花',
+    '香槟菊': '菊花',
+    '单头菊': '菊花',
+    '多头菊': '菊花',
+    '光面菊': '菊花',
+    '毛面菊': '菊花',
+    # 秋英/波斯菊类（与菊花同科不同属）
+    '秋英': '波斯菊',      # 秋英学名，种属输出为通俗名"波斯菊"
+    '波斯菊': '波斯菊',
+    '硫华菊': '波斯菊',
+    '巧克力秋英': '波斯菊',
+    '巧克力波斯菊': '波斯菊',
+    '巧克力宇宙': '波斯菊',
+    '红秋英': '波斯菊',
+    '粉秋英': '波斯菊',
+    '白秋英': '波斯菊',
+    '鼠尾草': '鼠尾草',
+    '火鹤花': '红掌',
+    '大花菊': '菊花',
+
+    # ========== 石竹科 ==========
+    '康乃馨': '康乃馨',
+    '单头康乃馨': '康乃馨',
+    '多头康乃馨': '康乃馨',
+    '染色康乃馨': '康乃馨',
+    '绿注康乃馨': '康乃馨',   # 绿色
+    '红迪康乃馨': '康乃馨',   # 红色
+    '白康乃馨': '康乃馨',    # 白色
+    '粉康乃馨': '康乃馨',    # 粉色
+    '满天星': '满天星',
+    '石竹': '石竹',
+    '洋石竹': '石竹',
+    # 满天星品种
+    '染色满天星': '满天星',   # 人工染色
+    '彩色满天星': '满天星',
+    '浪漫粉满天星': '满天星',
+    '天空蓝满天星': '满天星',
+    '星星满天星': '满天星',
+    '玲珑满天星': '满天星',
+    # 星花品种
+    '千万星': '满天星',     # 花头大
+    '百万星': '满天星',     # 花头小，枝干直
+    '伊洛斯': '满天星',     # 满天星品种
+
+    # ========== 龙胆科 ==========
+    '洋桔梗': '洋桔梗',
+    '桔梗': '桔梗',
+    '龙胆': '龙胆',
+    '紫罗兰': '紫罗兰',
+    # 洋桔梗品种
+    '美人鱼': '洋桔梗',      # Mermaid系列
+    '蓝利萨': '洋桔梗',      # Lisa Blue
+    '红镜': '洋桔梗',        # Red Glass
+    '重瓣伊格尔': '洋桔梗',  # 重瓣品种
+    'Maquia': '洋桔梗',
+    'Rosina': '洋桔梗',
+    '露西塔': '洋桔梗',      # 白色
+    '惊艳洛丽塔': '洋桔梗', # 粉色系
+    '维纳斯': '洋桔梗',      # 紫色系
+    '雅尔': '洋桔梗',        # 黄色系
+    # 新增洋桔梗品种
+    '三重唱': '洋桔梗',      # 三重唱系列
+    '美声': '洋桔梗',        # 美声系列
+    '大乐': '洋桔梗',        # 大乐系列
+    '朱颜': '洋桔梗',        # 粉色系
+    '彩风': '洋桔梗',        # 彩色系
+    '火灵鸟': '洋桔梗',      # 红色系
+    '蜜糖': '洋桔梗',        # 粉色系
+    '小铃铛': '洋桔梗',      # 小型品种
+    '罗曼': '洋桔梗',        # 罗曼系列
+
+    # ========== 兰科 ==========
+    '蝴蝶兰': '兰科',
+    '洋兰': '兰科',
+    '剑兰': '兰科',
+    '文心兰': '兰科',
+    '石斛兰': '兰科',
+    '万代兰': '兰科',
+    '跳舞兰': '兰科',
+    '千代兰': '兰科',
+    '梦香兰': '兰科',
+    '吉祥兰': '兰科',
+    '卡特兰': '兰科',
+    '蕙兰': '兰科',
+    '虾脊兰': '兰科',
+    '熊猫文心兰': '兰科',  # 跳舞兰品种，花色黄白如熊猫眼睛
+    '金蝶兰': '兰科',      # 跳舞兰别名
+    '瘤瓣兰': '兰科',      # 跳舞兰别名
+    '舞女兰': '兰科',      # 跳舞兰别名
+
+    # ========== 虎耳草科 ==========
+    '绣球': '绣球',
+    '大花绣球': '绣球',
+    '无尽夏绣球': '绣球',
+    '重瓣绣球': '绣球',
+    '染色绣球': '绣球',
+    '蓝绣球': '绣球',
+    '粉绣球': '绣球',
+    '复古绣球': '绣球',
+    '抹茶绣球': '绣球',
+    '妖精之吻': '绣球',
+    '佳澄': '绣球',
+    # 新增绣球品种
+    '花手鞠': '绣球',      # 日本高端品种
+    '你我一起': '绣球',    # 进口品种
+    '纱织小姐': '绣球',    # 日本品种
+    '蒙娜丽莎': '绣球',    # 进口品种
+    '秋色绣球': '绣球',    # 秋色系
+    '薄荷拇指': '绣球',    # 绿色系
+    '魔幻海洋': '绣球',    # 蓝色系
+
+    # ========== 芍药科 ==========
+    '洋牡丹': '牡丹',
+    '牡丹': '牡丹',
+    '芍药': '芍药',
+    '单瓣芍药': '芍药',
+    '重瓣芍药': '芍药',
+
+    # ========== 鸢尾科 ==========
+    '鸢尾': '鸢尾',
+    '蓝蝴蝶': '鸢尾',
+    '紫蝴蝶': '鸢尾',
+    '扁竹花': '鸢尾',
+    '唐菖蒲': '鸢尾',
+    '菖兰': '鸢尾',
+    '小苍兰': '鸢尾',
+
+    # ========== 毛茛科 ==========
+    '飞燕草': '飞燕草',
+    '大花飞燕': '飞燕草',
+    '小飞燕': '飞燕草',     # 小飞燕专用
+    '千鸟草': '飞燕草',     # 飞燕草别名
+    '铁线莲': '铁线莲',
+    '银莲花': '银莲花',
+    '洋银莲花': '银莲花',
+
+    # ========== 芭蕉科 ==========
+    '天堂鸟': '鹤望兰',
+    '鹤望兰': '鹤望兰',
+
+    # ========== 十字花科 ==========
+    '紫罗兰': '紫罗兰',
+
+    # ========== 禾本科 ==========
+    '粉黛乱子草': '乱子草',
+    '乱子草': '乱子草',
+
+    # ========== 山龙眼科 ==========
+    '帝王花': '帝王花',
+    '红火球帝王花': '帝王花',
+    '针垫花': '针垫花',
+
+    # ========== 桔梗科 ==========
+    '风铃草': '风铃草',
+
+    # ========== 腊梅科 ==========
+    '腊梅': '腊梅',
+
+    # ========== 伞形科 ==========
+    '蕾丝': '蕾丝',
+    '大蕾丝': '蕾丝',
+    '洋蕾丝': '蕾丝',
+
+    # ========== 天门冬科 ==========
+    '龙舌兰': '龙舌兰',
+    '虎皮兰': '虎皮兰',
+
+    # ========== 其他/杂项 ==========
+    '向日葵': '向日葵',
+    '翠珠': '翠珠',
+    '蓝星花': '蓝星花',
+    '雪柳': '雪柳',
+    '尤加利': '尤加利',
+    '尤加利叶': '尤加利',
+    '苹果尤加利': '尤加利',
+    '蓝梦尤加利': '尤加利',
+    '银叶尤加利': '尤加利',
+    '心叶尤加利': '尤加利',
+    '尤加利果': '尤加利',
+    '薰衣草': '薰衣草',
+    '红掌': '红掌',
+    '火鹤': '红掌',
+    '火鹤花': '红掌',
+    '凤梨': '凤梨',
+    '红豆': '红豆',
+    '绿豆': '绿豆',
+    '商陆': '商陆',
+    '六出花': '六出花',
+    '马蹄莲': '马蹄莲',
+    '海芋': '海芋',
+    '白掌': '白掌',
+    '紫掌': '紫掌',
+    '黄掌': '黄掌',
+    '星芹': '星芹',
+    '柴胡': '柴胡',
+    '薰衣草': '薰衣草',
+    '情人草': '情人草',
+    '水晶草': '水晶草',
+    '猫眼': '猫眼',
+    '蓬莱松': '蓬莱松',
+    '米兰': '米兰',
+    '黄莺': '黄莺',
+    '八卦草': '八卦草',
+    '枯枝': '枯枝',
+    '棉花': '棉花',
+    '芦苇': '芦苇',
+    '狗尾草': '狗尾草',
+    # 叶材
+    '天堂鸟叶': '鹤望兰',
+    '散尾葵': '散尾葵',
+    '龟背竹': '龟背竹',
+    '春羽': '春羽',
+    '琴叶榕': '琴叶榕',
+    '橡皮叶': '橡皮叶',
+    '侧柏': '侧柏',
+    '扁柏': '扁柏',
+    '清香木': '清香木',
+    '小米果': '小米果',
+    '南天竹': '南天竹',
+    '火棘': '火棘',
+    '小天使': '小天使',
+    '常春藤': '常春藤',
+    '绿萝叶': '绿萝',
+    '吊兰叶': '吊兰',
+    '竹叶': '竹叶',
+    '阔叶竹': '竹叶',
+    # 新增叶材品种
+    '十大功劳': '十大功劳',
+    '黄杨': '黄杨',
+    '黄杨叶': '黄杨',
+    '龙柳': '龙柳',
+    '龙柳叶': '龙柳',
+    '小米枝': '小米枝',
+    '小米叶': '小米叶',
+    '斑太叶': '斑太叶',
+    '斑叶': '斑叶',
+    '纽纹叶': '纽纹叶',
+    '米针叶': '米针叶',
+    '橙菠萝': '菠萝',
+    '黄菠萝': '菠萝',
+    '粉菠萝': '菠萝',
+    '小弗朗': '弗朗',
+    '大弗朗': '弗朗',
+    '刺芹': '刺芹',
+    '银叶菊': '银叶菊',
+    '高山积雪': '高山积雪',
+    '翠菊': '翠菊',
+    '蛇鞭菊': '蛇鞭菊',
+    '松虫草': '松虫草',
+    '蓝星球': '蓝星球',
+    '落新妇': '落新妇',
+    '袋鼠爪': '袋鼠爪',
+    '络新妇': '络新妇',
+}
+
+# 产品类型映射（非花材产品标准化名称）
+# key = 关键词, value = 标准化产品类型
+PRODUCT_TYPE_MAPPING = {
+    # ========== 花艺资材类 ==========
+    # 贺卡
+    '贺卡': '贺卡', '卡片': '卡片', '祝福卡': '祝福卡', '问候卡': '问候卡',
+    '感谢卡': '感谢卡', '生日卡': '生日卡', '生日卡片': '生日卡',
+    '标签卡': '标签卡', '吊牌': '吊牌', '花艺卡': '花艺卡', '花束卡': '花束卡',
+    '节日卡': '节日卡', '明信片': '明信片', '心愿卡': '心愿卡',
+    # 包花纸（大部分1:1，少数归组）
+    '包装纸': '包装纸', '包花纸': '包装纸',
+    '牛皮纸': '牛皮纸', '雪梨纸': '雪梨纸', '瓦楞纸': '瓦楞纸',
+    '欧雅纸': '欧雅纸', '韩素纸': '韩素纸', '韩纸': '韩素纸',
+    '玻璃纸': '玻璃纸', '雾面纸': '雾面纸',
+    '牛奶棉': '木棉纸', '木棉纸': '木棉纸',
+    '雪奈纸': '雪奈纸', 'OPP膜': 'OPP膜', '和纸': '和纸',
+    '油画纸': '油画纸', '防水纸': '防水纸', '珠光纸': '珠光纸',
+    '云龙纸': '云龙纸', '莫奈': '莫奈纸', '肌理纸': '肌理纸',
+    '蝴蝶纸': '蝴蝶纸', '翅膀纸': '翅膀纸', '锦衣纸': '锦衣纸', '羽毛纸': '羽毛纸', '蕾丝纸': '蕾丝纸',
+    '压纹纸': '压纹纸', '圆点纸': '圆点纸', '波卡尔': '波卡尔', '波点纸': '波点纸',
+    '格子纸': '格子纸', '条纹纸': '条纹纸', '印花纸': '印花纸', '造型纸': '造型纸',
+    '硬卡纸': '硬卡纸', '卡纸': '卡纸', '彩色纸': '彩色纸',
+    # 丝带捆绑类
+    '丝带': '丝带', '扎带': '丝带', '胶带': '胶带',
+    '鱼尾纱': '鱼尾纱', '罗纹带': '罗纹带', '波浪纱': '波浪纱', '缎带': '缎带', '纱带': '纱带',
+    '蕾丝带': '蕾丝带', '棉绳': '棉绳', '麻绳': '麻绳', '拉菲草': '拉菲草', '雪纱': '雪纱', '欧根纱': '欧根纱', '格子带': '格子带',
+    # 花器
+    '花瓶': '花瓶', '花盆': '花盆', '醒花桶': '醒花桶', '养花桶': '醒花桶', '玻璃瓶': '玻璃瓶', '陶瓷瓶': '陶瓷瓶',
+    '花插': '花插', '剑山': '剑山', '试管瓶': '试管瓶', '吊瓶': '吊瓶', '壁挂瓶': '壁挂瓶', '抱抱桶': '抱抱桶',
+    '圆肚瓶': '圆肚瓶', '长颈瓶': '长颈瓶', '梅瓶': '梅瓶', '葫芦瓶': '葫芦瓶', '观音瓶': '观音瓶', '玉壶春瓶': '玉壶春瓶',
+    '天球瓶': '天球瓶', '胆瓶': '胆瓶', '蒜头瓶': '蒜头瓶', '棒槌瓶': '棒槌瓶', '凤尾瓶': '凤尾瓶', '柳叶瓶': '柳叶瓶',
+    '灯笼瓶': '灯笼瓶', '双耳瓶': '双耳瓶', '盘口瓶': '盘口瓶', '瓶': '花瓶',
+    # 包材
+    '手提袋': '包装袋', '礼品袋': '包装袋', '防尘袋': '包装袋', '配送袋': '包装袋', '包装袋': '包装袋',
+    '透明袋': '包装袋', '纸袋': '纸袋', '塑料袋': '塑料袋', '礼袋': '包装袋', '束口袋': '束口袋',
+    # 礼盒/包装盒
+    '礼盒': '礼盒', '包装盒': '包装盒', '花盒': '花盒', '手提盒': '手提盒', '鲜花盒': '鲜花盒', '手捧盒': '手捧盒',
+    '盆栽礼盒': '盆栽礼盒', '绿植礼盒': '绿植礼盒', '开业礼盒': '开业礼盒', '节日礼盒': '节日礼盒',
+    '花篮': '花篮', '篮子': '花篮', '提篮': '提篮',
+    # 玩偶/配件/道具
+    '玩偶': '玩偶', '招财猫': '招财猫', '配件': '配件', '小熊': '小熊', '蝴蝶结': '蝴蝶结', '珍珠': '珍珠',
+    '摆件': '摆件', '陶瓷摆件': '陶瓷摆件', '装饰品': '装饰品', '挂件': '挂件', '吊坠': '吊坠', '插片': '插片',
+    '花艺配件': '花艺配件', '婚庆配件': '婚庆配件', '开业配件': '开业配件', '仿真水果': '仿真水果', '仿真蔬菜': '仿真水果',
+    '小天使': '小天使', '爱心': '爱心', '星星摆件': '星星摆件', '五角星': '五角星', '吉祥物': '吉祥物', '生肖': '生肖摆件',
+    '小马': '小马', '布艺马': '布艺马', '金元宝': '金元宝', '福字': '福字摆件', '中国结': '中国结',
+    # 气球
+    '气球': '气球', '铝膜气球': '气球', '乳胶气球': '气球', '波波球': '气球', '氦气球': '气球',
+    '字母气球': '字母气球', '数字气球': '数字气球', '长条气球': '长条气球', '心形气球': '心形气球', '波点气球': '波点气球',
+    # 喷漆喷色剂
+    '喷漆': '喷漆', '喷色剂': '喷色剂', '染色剂': '染色剂', '彩喷': '彩喷', '自喷漆': '喷漆', '碎冰蓝': '碎冰蓝', '鲜花漆': '喷漆',
+    # 粘贴剂
+    '花泥': '花泥', '胶水': '胶水', '热熔胶': '热熔胶', '泡沫板': '泡沫板', '珍珠棉': '珍珠棉',
+    '固定底座': '固定底座', '包花神器': '包花神器', '保鲜管': '保鲜管', '营养管': '营养管', '吸水棉': '吸水棉',
+    '花泥刀': '花泥刀', '胶棒': '胶带', '双面胶': '胶带',
+    # 垃圾袋
+    '垃圾袋': '垃圾袋', '清洁袋': '垃圾袋',
+    # 桌布
+    '桌布': '桌布', '台布': '桌布', '餐桌布': '餐桌布',
+    # 低值易耗品
+    '一次性': '一次性用品', '手套': '手套', '围裙': '围裙', '袖套': '袖套', '口罩': '口罩',
+    # 材料包
+    '材料包': '材料包', 'DIY材料': 'DIY材料', '手工包': '手工包', '半成品': '半成品',
+    '扭扭棒': '扭扭棒', '手工花': '手工花', '年宵花': '年宵花', 'DIY花束': 'DIY花束',
+    # 五金工具
+    '剪刀': '花艺剪刀', '花泥刀': '花泥刀', '打刺夹': '打刺夹', '工具': '花艺工具', '美工刀': '花艺工具',
+    '削皮刀': '花艺工具', '钳子': '钳子', '铁丝': '铁丝', '理花神器': '理花神器', '齿扒': '齿扒', '花扒': '花扒', '扒子': '扒子', '花艺工具': '花艺工具',
+    # 道具
+    '展示道具': '展示道具', '装饰道具': '装饰道具', '羽毛': '羽毛', '鸵鸟毛': '鸵鸟毛', '展示架': '展示架', '花架': '花架', '陈列道具': '陈列道具',
+    # 行政耗材
+    '订书机': '订书机', '订书针': '订书针', '笔': '笔', '本子': '本子', '文件夹': '文件夹', '胶带座': '胶带座',
+    # 园艺盆栽
+    '绿植': '绿植', '多肉': '多肉', '仙人掌': '仙人掌', '发财树': '发财树', '幸福树': '幸福树', '绿萝': '绿萝', '吊兰': '吊兰',
+}
+
+# 品类 → Notion产品大类映射
+CATEGORY_TO_NOTION_CATEGORY = {
+    # 花材类
+    '鲜切花材': '花材', '鲜切叶材': '花材', '仿真/塑料花材': '花材', '永生花/干花类型': '花材',
+    # 资材类
+    '花艺资材-贺卡': '资材', '花艺资材-包花纸': '资材', '花艺资材-丝带捆绑类耗材': '资材',
+    '花艺资材-气球': '资材', '花艺资材-喷漆喷色剂': '资材', '花艺资材-耗材-粘贴剂': '资材',
+    '花艺资材-材料包': '资材',
+    # 包装类
+    '花艺资材-包材': '包装', '花艺资材-礼盒/包装盒': '包装',
+    # 盆器类
+    '花艺资材-花器': '盆器', '园艺-盆栽': '盆器',
+    # 配件类
+    '花艺资材-玩偶/配件/道具': '配件', '道具': '配件',
+    # 工具类
+    '五金工具': '工具',
+    # 其他
+    '花艺资材-耗材-垃圾袋': '其他', '花艺资材-桌布': '其他',
+    '花艺资材-低值易耗品': '其他', '行政耗材-文具': '其他',
+}
+
+# 品种类型映射（用于花材的详细分类）
+# key = 品种名, value = 品种类型（单头玫瑰/多头玫瑰/东方百合等）
+VARIETY_TYPE_MAPPING = {
+    # 玫瑰
+    '多头玫瑰': '多头玫瑰',
+    '单头玫瑰': '单头玫瑰',
+    # 百合系
+    '东方百合': '东方百合', '西伯利亚': '东方百合', '索邦': '东方百合', '索尔邦': '东方百合',
+    '黄天霸': '东方百合', '异国阳光': '东方百合', '艾琳娜': '东方百合', '红福': '东方百合',
+    '罗宾娜': '东方百合', '普拉芬多': '东方百合', '白天使': '东方百合', '卡萨布兰卡': '东方百合',
+    '甜蜜赞美诗': '东方百合',
+    '亚洲百合': '亚洲百合', '黄冠': '亚洲百合', '柏林百合': '亚洲百合', '皇冠': '亚洲百合',
+    '眼线': '亚洲百合', '美素': '亚洲百合',
+    'OT百合': 'OT百合', '木门': 'OT百合', '木门百合': 'OT百合',
+    'LO百合': 'LO百合', '特里昂菲特': 'LO百合',
+    'LA百合': 'LA百合',
+    '铁炮百合': '铁炮百合', '粉铁炮': '铁炮百合',
+    '百合': '百合', '重瓣百合': '重瓣百合', '麝香百合': '麝香百合', '鹿子百合': '鹿子百合', '卷丹': '卷丹',
 }
 
 # 规格建议库（按品类）
@@ -296,20 +875,117 @@ SPEC_SUGGESTIONS = {
     },
 }
 
+# 标准化产品清单（用于 Notion 数据库）
+# 每个条目代表一个标准化产品
+STANDARD_PRODUCTS = []
+
+# 构建花材产品
+for variety, species in SPECIES_CATEGORY.items():
+    # 确定品种类型
+    if species == '多头玫瑰':
+        variety_type = '多头玫瑰'
+    elif species == '玫瑰':
+        variety_type = '单头玫瑰'
+    elif '百合' in species:
+        variety_type = VARIETY_TYPE_MAPPING.get(variety, species)
+    else:
+        variety_type = species
+
+    # 获取关键词
+    original_keywords = [variety]
+    # 检查是否在其他品类关键词中也有
+    for cat, keywords in CATEGORY_KEYWORDS.items():
+        if variety in keywords and variety not in original_keywords:
+            original_keywords.append(variety)
+
+    STANDARD_PRODUCTS.append({
+        'product': variety,
+        'variety_type': variety_type,
+        'species': species,
+        'category': '花材',
+        'original_keywords': original_keywords,
+        'common_colors': [],
+        'spec': '10支/扎',
+        'unit': '扎',
+        'notes': ''
+    })
+
+# 构建非花材产品
+for keyword, product_type in PRODUCT_TYPE_MAPPING.items():
+    # 跳过已添加的花材产品
+    if product_type in [p['product'] for p in STANDARD_PRODUCTS]:
+        # 添加额外关键词
+        for p in STANDARD_PRODUCTS:
+            if p['product'] == product_type and keyword not in p['original_keywords']:
+                p['original_keywords'].append(keyword)
+        continue
+
+    # 确定 Notion 分类
+    notion_cat = '其他'
+    for cat_key, cat_val in CATEGORY_TO_NOTION_CATEGORY.items():
+        if cat_key in CATEGORY_KEYWORDS and keyword in CATEGORY_KEYWORDS[cat_key]:
+            notion_cat = cat_val
+            break
+
+    # 尝试获取规格建议
+    default_spec = ''
+    default_unit = ''
+    for cat, specs in SPEC_SUGGESTIONS.items():
+        if cat_key in cat.split('-') or any(kw in cat for kw in keyword):
+            default_spec = specs.get('size', [''])[0] if specs.get('size') else ''
+            break
+
+    STANDARD_PRODUCTS.append({
+        'product': product_type,
+        'variety_type': '',
+        'species': '',
+        'category': notion_cat,
+        'original_keywords': [keyword],
+        'common_colors': [],
+        'spec': default_spec,
+        'unit': default_unit,
+        'notes': ''
+    })
+
+# 按产品名排序
+STANDARD_PRODUCTS.sort(key=lambda x: x['product'])
+
+# 反向索引：关键词 -> 标准化产品名
+KEYWORD_TO_PRODUCT = {}
+for product_data in STANDARD_PRODUCTS:
+    product = product_data['product']
+    for kw in product_data['original_keywords']:
+        KEYWORD_TO_PRODUCT[kw] = product
+
 # 标准颜色词
 STANDARD_COLORS = list(set(COLOR_MAPPING.values()))
 
 
 class ItemNamingReviewer:
-    """物品命名审查器 v2.0"""
+    """物品命名审查器 v2.19"""
 
-    def __init__(self):
-        self.category_keywords = CATEGORY_KEYWORDS
+    def __init__(self, notion_data: Optional[Dict] = None):
+        """初始化审查器
+
+        Args:
+            notion_data: 可选，从 Notion 加载的数据字典
+        """
+        # 使用 Notion 数据或静态数据
+        if notion_data:
+            self.category_keywords = notion_data.get('categories', CATEGORY_KEYWORDS)
+            self.spec_species_category = notion_data.get('species', SPECIES_CATEGORY)
+            self.color_mapping = notion_data.get('colors', COLOR_MAPPING)
+        else:
+            self.category_keywords = CATEGORY_KEYWORDS
+            self.spec_species_category = SPECIES_CATEGORY
+            self.color_mapping = COLOR_MAPPING
+
         self.filter_words = FILTER_WORDS
-        self.color_mapping = COLOR_MAPPING
         self.material_mapping = MATERIAL_MAPPING
         self.unit_suggestions = UNIT_SUGGESTIONS
         self.spec_suggestions = SPEC_SUGGESTIONS
+        self.product_type_mapping = PRODUCT_TYPE_MAPPING
+        self.category_to_notion_category = CATEGORY_TO_NOTION_CATEGORY
 
     def detect_platform(self, name: str) -> str:
         """检测来源平台"""
@@ -327,10 +1003,12 @@ class ItemNamingReviewer:
         """提取规格信息"""
         spec = {}
 
-        # 提取等级 A/B/C/D/E级
-        grade_match = re.search(r'([A-E])级', name)
-        if grade_match:
-            spec['grade'] = f'{grade_match.group(1)}级'
+        # 提取等级 A/B/C/D/E级（支持多级如ABCDE级，取最高级A）
+        grade_seq = re.findall(r'([A-E]+)级', name)
+        if grade_seq:
+            spec['grade'] = f'{grade_seq[0][0]}级'  # 取序列第一个字符（最高级）
+            if len(grade_seq[0]) > 1:
+                spec['multi_grades'] = list(grade_seq[0])  # 存储所有等级如['A','B','C','D','E']
 
         # 提取数量 XX支/扎
         qty_match = re.search(r'(\d+)\s*支[/／]扎', name)
@@ -380,11 +1058,61 @@ class ItemNamingReviewer:
         if star_pack_match:
             spec['pack'] = f'{star_pack_match.group(1)}{star_pack_match.group(2)}'
 
+        # 提取 X套Y 格式 (如2套8表示2套8个桶)
+        set_item_match = re.search(r'(\d+)套(\d+)(?![/／])', name)
+        if set_item_match:
+            spec['pack'] = f'{set_item_match.group(1)}套{set_item_match.group(2)}个'
+
         # 提取简单数量 XX张 XX个 XX片（不带有/包的）
         if 'pack' not in spec:
             simple_qty_match = re.search(r'(\d+)\s*(张|个|片|支|套)(?![/／])', name)
             if simple_qty_match:
                 spec['quantity'] = f'{simple_qty_match.group(1)}{simple_qty_match.group(2)}'
+
+        # ========== 干花类规格提取 ==========
+        # 提取捆束数量 N束 (如"10束紫罗兰")
+        bundle_match = re.search(r'(\d+)\s*束(?=[紫蓝红粉白黄绿橙紫罗兰玫瑰满天星])', name)
+        if bundle_match:
+            spec['bundle_qty'] = f'{bundle_match.group(1)}束'
+
+        # 提取最小单位数量 N支 (干花类)
+        if 'quantity' not in spec:
+            min_unit_match = re.search(r'(\d+)\s*支(?!\s*[/／]\s*扎)', name)
+            if min_unit_match:
+                spec['quantity'] = f'{min_unit_match.group(1)}支'
+
+        # 提取赠送数量 送N支
+        gift_match = re.search(r'送\s*(\d+)\s*支', name)
+        if gift_match:
+            spec['gift_qty'] = f'送{gift_match.group(1)}支'
+
+        # 提取总计数量 共N支
+        total_match = re.search(r'共\s*(\d+)\s*支', name)
+        if total_match:
+            spec['total_qty'] = f'共{total_match.group(1)}支'
+
+        # 提取捆束换算 如"100支/束"表示1束=100支
+        bundle_conv_match = re.search(r'(\d+)\s*支\s*/\s*束', name)
+        if bundle_conv_match:
+            spec['bundle_conversion'] = int(bundle_conv_match.group(1))
+
+        # 自动换算为标准化单位
+        if 'total_qty' in spec:
+            # 优先使用总计数量（共N支）
+            total_num = int(re.search(r'\d+', spec['total_qty']).group())
+            spec['std_quantity'] = f'{total_num}支'
+            if 'bundle_qty' in spec:
+                bundle_num = int(re.search(r'\d+', spec['bundle_qty']).group())
+                gift_num = int(re.search(r'\d+', spec.get('gift_qty', '0支')).group()) if 'gift_qty' in spec else 0
+                spec['conversion_note'] = f'{bundle_num}束 + 送{gift_num}支 = 共{total_num}支'
+        elif 'bundle_qty' in spec and 'quantity' in spec:
+            bundle_num = int(re.search(r'\d+', spec['bundle_qty']).group())
+            min_num = int(re.search(r'\d+', spec['quantity']).group())
+            conv_rate = spec.get('bundle_conversion', 10)
+            total_stems = bundle_num * conv_rate if bundle_num > 0 and min_num > 0 else min_num
+            spec['std_quantity'] = f'{total_stems}支'
+            if bundle_num * conv_rate > 0:
+                spec['conversion_note'] = f'{bundle_num}束 × {conv_rate}支/束 = {total_stems}支'
 
         # 提取长度 XX码 XX米
         length_match = re.search(r'(\d+)\s*(码|米|m)(?![a-z])', name, re.IGNORECASE)
@@ -412,10 +1140,21 @@ class ItemNamingReviewer:
         if teeth_match:
             spec['teeth'] = f'{teeth_match.group(1)}齿'
 
-        # 提取重量 XX克 XXg
-        weight_match = re.search(r'(\d+)\s*(克|g|G)', name)
-        if weight_match:
-            spec['weight'] = f'{weight_match.group(1)}克'
+        # 提取重量 XXg/扎 XX克/扎
+        weight_per_match = re.search(r'(\d+)\s*(克|g|G)\s*/\s*(扎|支|包)', name)
+        if weight_per_match:
+            spec['weight_per'] = f'{weight_per_match.group(1)}{weight_per_match.group(2)}/{weight_per_match.group(3)}'
+        else:
+            # 提取简单重量 XX克 XXg
+            weight_match = re.search(r'(\d+)\s*(克|g|G)(?!\s*[/／])', name)
+            if weight_match:
+                spec['weight'] = f'{weight_match.group(1)}克'
+
+        # 提取属性 无盖/带盖/不含盖/含盖
+        if re.search(r'无盖|不含盖|不带盖', name):
+            spec['attribute'] = '无盖'
+        elif re.search(r'带盖|含盖', name):
+            spec['attribute'] = '带盖'
 
         return spec
 
@@ -465,14 +1204,34 @@ class ItemNamingReviewer:
 
     def match_category(self, name: str) -> Optional[str]:
         """匹配一级大类"""
+        # 优先检测：干花 -> 永生花/干花类型（避免"紫罗兰"等花名先匹配到鲜切花材）
+        if '干花' in name:
+            return '永生花/干花类型'
+        # 特殊处理：满天星叶 是叶材而非花材
+        if '满天星叶' in name:
+            return '鲜切叶材'
         for category, keywords in self.category_keywords.items():
             for keyword in keywords:
                 if keyword in name:
                     return category
         return None
 
-    def extract_product_name(self, name: str, category: str) -> str:
-        """提取产品名称"""
+    def _extract_nonflower_product_name(self, filtered: str, category: str) -> Tuple[str, str]:
+        """使用 PRODUCT_TYPE_MAPPING 数据驱动提取非花材产品名称"""
+        keywords = self.category_keywords.get(category, [])
+        # 按长度降序排列，最长匹配优先
+        sorted_keywords = sorted(keywords, key=len, reverse=True)
+        for keyword in sorted_keywords:
+            if keyword in filtered:
+                product_type = self.product_type_mapping.get(keyword, keyword)
+                return (product_type, '')
+        return ('产品', '')
+
+    def extract_product_name(self, name: str, category: str) -> Tuple[str, str]:
+        """提取产品名称
+        Returns:
+            Tuple[str, str]: (产品名称, 玫瑰品种) - 对于玫瑰类，品种为具体品种名；其他品类品种为空
+        """
         # 过滤营销词
         filtered = self.filter_marketing_words(name)
 
@@ -481,232 +1240,549 @@ class ItemNamingReviewer:
         filtered = re.sub(r'颜色[分类]*[：:].*$', '', filtered)
         filtered = re.sub(r'规格[：:].*$', '', filtered)
 
-        # 根据类别提取核心词
-        if category == '花艺资材-包花纸':
-            if '玻璃纸' in filtered:
-                return '玻璃纸'
-            elif '牛皮纸' in filtered:
-                return '牛皮纸'
-            elif '雪梨纸' in filtered:
-                return '雪梨纸'
-            elif '木棉纸' in filtered or '牛奶棉' in filtered:
-                return '木棉纸'
-            elif '欧雅纸' in filtered:
-                return '欧雅纸'
-            elif '雪奈纸' in filtered:
-                return '雪奈纸'
-            elif '雾面纸' in filtered:
-                return '雾面纸'
-            elif '韩素纸' in filtered or '韩纸' in filtered:
-                return '韩素纸'
-            else:
-                return '包装纸'
+        # 非花材类：使用 PRODUCT_TYPE_MAPPING 数据驱动
+        if category in ['花艺资材-包花纸', '花艺资材-喷漆喷色剂', '花艺资材-包材',
+                         '花艺资材-礼盒/包装盒', '花艺资材-贺卡', '花艺资材-丝带捆绑类耗材',
+                         '花艺资材-玩偶/配件/道具', '花艺资材-气球', '花艺资材-材料包',
+                         '行政耗材-文具', '花艺资材-低值易耗品', '花艺资材-耗材-垃圾袋',
+                         '花艺资材-桌布', '园艺-盆栽', '道具']:
+            return self._extract_nonflower_product_name(filtered, category)
 
-        elif category == '花艺资材-喷漆喷色剂':
-            return '鲜花喷漆'
-
-        elif category == '花艺资材-包材':
-            if '防尘袋' in filtered:
-                return '防尘袋'
-            elif '手提袋' in filtered:
-                return '手提袋'
-            elif '礼品袋' in filtered:
-                return '礼品袋'
-            return '包装袋'
-
-        elif category == '花艺资材-礼盒/包装盒':
-            if '盆栽礼盒' in filtered or '绿植礼盒' in filtered:
-                return '盆栽礼盒'
-            elif '抱抱桶' in filtered:
-                return '抱抱桶'
-            elif '花篮' in filtered or '篮子' in filtered:
-                return '花篮'
-            elif '提篮' in filtered:
-                return '提篮'
-            elif '花盒' in filtered:
-                return '花盒'
-            elif '礼盒' in filtered:
-                return '礼盒'
-            return '包装盒'
-
-        elif category == '花艺资材-贺卡':
-            if '生日卡' in filtered or '生日' in filtered:
-                return '生日卡'
-            elif '新年卡' in filtered or '新年' in filtered or '贺岁' in filtered:
-                return '新年卡'
-            elif '感谢卡' in filtered or '感谢' in filtered:
-                return '感谢卡'
-            elif '祝福卡' in filtered or '祝福' in filtered:
-                return '祝福卡'
-            elif '节日卡' in filtered or '节日' in filtered:
-                return '节日卡'
-            elif '花束卡' in filtered:
-                return '花束卡'
-            elif '花艺卡' in filtered:
-                return '花艺卡'
-            elif '明信片' in filtered:
-                return '明信片'
-            return '贺卡'
-
-        elif category == '花艺资材-丝带捆绑类耗材':
-            if '鱼尾纱' in filtered:
-                return '鱼尾纱'
-            elif '罗纹带' in filtered:
-                return '罗纹带'
-            elif '丝带' in filtered:
-                return '丝带'
-            elif '扎带' in filtered:
-                return '扎带'
-            elif '胶带' in filtered:
-                return '胶带'
-            elif '蕾丝带' in filtered:
-                return '蕾丝带'
-            return '丝带'
-
+        # 花器：特殊器型优先匹配
         elif category == '花艺资材-花器':
-            # 花瓶器型识别
             if '圆肚瓶' in filtered:
-                return '圆肚瓶'
+                return ('圆肚瓶', '')
             elif '长颈瓶' in filtered:
-                return '长颈瓶'
+                return ('长颈瓶', '')
             elif '梅瓶' in filtered:
-                return '梅瓶'
+                return ('梅瓶', '')
             elif '葫芦瓶' in filtered:
-                return '葫芦瓶'
+                return ('葫芦瓶', '')
             elif '观音瓶' in filtered:
-                return '观音瓶'
+                return ('观音瓶', '')
             elif '玉壶春瓶' in filtered:
-                return '玉壶春瓶'
+                return ('玉壶春瓶', '')
             elif '天球瓶' in filtered:
-                return '天球瓶'
+                return ('天球瓶', '')
             elif '胆瓶' in filtered:
-                return '胆瓶'
+                return ('胆瓶', '')
             elif '花瓶' in filtered:
-                return '花瓶'
+                return ('花瓶', '')
             elif '醒花桶' in filtered or '养花桶' in filtered:
-                return '醒花桶'
+                return ('醒花桶', '')
             elif '抱抱桶' in filtered:
-                return '抱抱桶'
+                return ('抱抱桶', '')
             elif '花盆' in filtered:
-                return '花盆'
-            return '花器'
+                return ('花盆', '')
+            return self._extract_nonflower_product_name(filtered, category)
+
+        # 鲜切叶材：特殊叶材品种优先
+        elif category == '鲜切叶材':
+            if '苹果尤加利' in filtered or '蓝梦尤加利' in filtered or '银叶尤加利' in filtered or '心叶尤加利' in filtered:
+                return ('尤加利', '')
+            elif '尤加利叶' in filtered:
+                return ('尤加利叶', '')
+            elif '尤加利' in filtered:
+                return ('尤加利', '')
+            return self._extract_nonflower_product_name(filtered, category)
+
+        # 五金工具：特殊工具优先
+        elif category == '五金工具':
+            if any(tool in filtered for tool in ['理花神器', '齿扒', '花扒', '扒子']):
+                return ('理花神器', '')
+            elif '剪刀' in filtered:
+                return ('花艺剪刀', '')
+            elif '花泥刀' in filtered:
+                return ('花泥刀', '')
+            elif '打刺夹' in filtered:
+                return ('打刺夹', '')
+            return self._extract_nonflower_product_name(filtered, category)
 
         elif category == '花艺资材-玩偶/配件/道具':
             if '摆件' in filtered:
                 if '陶瓷' in filtered:
-                    return '陶瓷摆件'
-                return '摆件'
+                    return ('陶瓷摆件', '')
+                return ('摆件', '')
             elif '吉祥物' in filtered:
                 if '布艺' in filtered:
-                    return '布艺吉祥物'
-                return '吉祥物'
+                    return ('布艺吉祥物', '')
+                return ('吉祥物', '')
             elif '布艺马' in filtered or '小马' in filtered:
-                return '布艺马'
+                return ('布艺马', '')
             elif '金元宝' in filtered:
-                return '金元宝'
+                return ('金元宝', '')
             elif '招财猫' in filtered:
-                return '招财猫'
+                return ('招财猫', '')
             elif '玩偶' in filtered or '小熊' in filtered:
-                return '玩偶'
+                return ('玩偶', '')
             elif '蝴蝶结' in filtered:
-                return '蝴蝶结'
+                return ('蝴蝶结', '')
             elif '珍珠' in filtered:
-                return '珍珠'
+                return ('珍珠', '')
             elif '知花' in filtered:
-                return '知花'
+                return ('知花', '')
             elif '挂件' in filtered:
-                return '挂件'
-            return '配件'
+                return ('挂件', '')
+            return ('配件', '')
 
         elif category == '花艺资材-气球':
             if '铝膜' in filtered:
                 if '字母' in filtered:
-                    return '字母铝膜气球'
+                    return ('字母铝膜气球', '')
                 elif '数字' in filtered:
-                    return '数字铝膜气球'
-                return '铝膜气球'
+                    return ('数字铝膜气球', '')
+                return ('铝膜气球', '')
             elif '乳胶' in filtered:
-                return '乳胶气球'
+                return ('乳胶气球', '')
             elif '波波球' in filtered:
-                return '波波球'
+                return ('波波球', '')
             elif '长条' in filtered:
-                return '长条气球'
+                return ('长条气球', '')
             elif '心形' in filtered:
-                return '心形气球'
-            return '气球'
+                return ('心形气球', '')
+            return ('气球', '')
 
         elif category == '花艺资材-材料包':
             if '扭扭棒' in filtered or '手工花' in filtered:
-                return '扭扭棒手工花'
+                return ('扭扭棒手工花', '')
             elif '年宵花' in filtered:
-                return '年宵花材料包'
+                return ('年宵花材料包', '')
             elif 'DIY' in filtered:
-                return 'DIY材料包'
-            return '材料包'
+                return ('DIY材料包', '')
+            return ('材料包', '')
 
         elif category == '鲜切花材':
+            # 月季/玫瑰品种检测 - 品种名不在名称中时也能匹配
+            rose_varieties = [
+                ('草莓杏仁饼', '草莓杏仁饼'),
+            ]
+            for var, var_name in rose_varieties:
+                if var in filtered:
+                    return ('单头玫瑰', var_name)  # 这些都是单头月季品种
+            # 玫瑰品种 - 保留单头/多头区分
+            # 返回 (产品名称, 品种) 元组，玫瑰类产品名称包含单头/多头，品种为具体品种
             if '多头玫瑰' in filtered:
-                return '多头玫瑰'
+                # 检查具体品种
+                rose_type = '多头玫瑰'
+                for var, variety in [
+                    ('巧克力泡泡', '巧克力泡泡'), ('橙色泡泡', '橙色泡泡'), ('黄色泡泡', '黄色泡泡'),
+                    ('蓝色泡泡', '蓝色泡泡'), ('粉蜡笔', '粉蜡笔'), ('流星', '流星'),
+                    ('霓虹泡泡', '霓虹泡泡'), ('狂欢泡泡', '狂欢泡泡'), ('幻影泡泡', '幻影泡泡'),
+                    ('多洛塔', '多洛塔'), ('丁香泡泡', '丁香泡泡'),
+                    ('卡罗拉', '卡罗拉'), ('冷美人', '冷美人'), ('蓝色妖姬', '蓝色妖姬'),
+                    ('黑魔术', '黑魔术'), ('影星', '影星'), ('金香玉', '金香玉'),
+                    ('蜜桃雪山', '蜜桃雪山'), ('红袖', '红袖'), ('苏醒', '苏醒'),
+                    ('金辉', '金辉'), ('紫影', '紫影'), ('紫皇后', '紫皇后'),
+                    ('大桃红', '大桃红'), ('彩虹玫瑰', '彩虹玫瑰'), ('迷恋', '迷恋'),
+                    ('雅典娜', '雅典娜'), ('洛神', '洛神'), ('紫霞', '紫霞'),
+                    ('戴安娜', '戴安娜'),
+                ]:
+                    if var in filtered:
+                        return (rose_type, variety)  # (多头玫瑰, 品种)
+                return ('多头玫瑰', '')
             elif '单头玫瑰' in filtered or '玫瑰' in filtered:
-                return '单头玫瑰'
-            elif '郁金香' in filtered:
-                return '郁金香'
-            elif '洋桔梗' in filtered:
-                return '洋桔梗'
-            elif '康乃馨' in filtered:
-                return '康乃馨'
-            elif '向日葵' in filtered:
-                return '向日葵'
-            elif '洋牡丹' in filtered:
-                return '洋牡丹'
-            elif '绣球' in filtered:
-                return '绣球'
+                # 检查具体品种
+                rose_type = '单头玫瑰'
+                for var, variety in [
+                    ('卡罗拉', '卡罗拉'), ('冷美人', '冷美人'), ('蓝色妖姬', '蓝色妖姬'),
+                    ('黑魔术', '黑魔术'), ('影星', '影星'), ('金香玉', '金香玉'),
+                    ('蜜桃雪山', '蜜桃雪山'), ('红袖', '红袖'), ('苏醒', '苏醒'),
+                    ('金辉', '金辉'), ('紫影', '紫影'), ('紫皇后', '紫皇后'),
+                    ('大桃红', '大桃红'), ('彩虹玫瑰', '彩虹玫瑰'), ('迷恋', '迷恋'),
+                    ('雅典娜', '雅典娜'), ('洛神', '洛神'), ('紫霞', '紫霞'),
+                    ('戴安娜', '戴安娜'), ('香槟', '香槟玫瑰'),
+                    # 补充品种
+                    ('法兰西', '法兰西'), ('法国红', '法国红'), ('糖果', '糖果雪山'),
+                    ('粉雪山', '粉雪山'), ('海洋之歌', '海洋之歌'), ('海洋', '海洋之歌'),
+                    ('红唇', '红唇'), ('海金香玉', '海金香玉'), ('闪耀', '闪耀'),
+                    ('太阳王', '太阳王'), ('如意', '如意'), ('高原红', '高原红'),
+                    ('秀色', '秀色'), ('楼兰', '楼兰'), ('阿班斯', '阿班斯'),
+                    ('草莓杏仁饼', '草莓杏仁饼'),
+                    # 新增品种
+                    ('粉荔枝', '粉荔枝'), ('白荔枝', '白荔枝'),
+                    ('坦尼克', '坦尼克'), ('白巧克力', '白巧克力'),
+                    ('杏色蕾丝', '杏色蕾丝'), ('凯拉', '凯拉'), ('凯莉', '凯莉'),
+                    ('粉之精', '粉之精'), ('紫之精', '紫之精'),
+                    ('自由', '自由'),
+                ]:
+                    if var in filtered:
+                        return (rose_type, variety)  # (单头玫瑰, 品种)
+                return ('单头玫瑰', '')  # 默认玫瑰为单头
+            # 百合品种 - 优先匹配具体品种，再匹配大类
+            # 具体品种 -> 返回 (百合系类型, 具体品种)
+            elif '西伯利亚' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('西伯利亚', '百合'), '西伯利亚')
+            elif '索邦' in filtered or '索尔邦' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('索邦', '百合'), '索邦')
+            elif '黄天霸' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('黄天霸', '百合'), '黄天霸')
+            elif '卡萨布兰卡' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('卡萨布兰卡', '百合'), '卡萨布兰卡')
+            elif '特里昂' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('特里昂菲特', '百合'), '特里昂菲特')
+            elif '甜蜜赞美诗' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('甜蜜赞美诗', '百合'), '甜蜜赞美诗')
+            elif '罗宾娜' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('罗宾娜', '百合'), '罗宾娜')
+            elif '普拉芬多' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('普拉芬多', '百合'), '普拉芬多')
+            elif '红福' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('红福', '百合'), '红福')
+            elif '艾琳娜' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('艾琳娜', '百合'), '艾琳娜')
+            elif '异国阳光' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('异国阳光', '百合'), '异国阳光')
+            elif '柏林' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('柏林百合', '百合'), '柏林百合')
+            elif '白天使' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('白天使', '百合'), '白天使')
+            elif '粉铁炮' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('粉铁炮', '百合'), '粉铁炮')
+            elif '美素' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('美素', '百合'), '美素')
+            elif '眼线' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('眼线', '百合'), '眼线')
+            elif '皇冠' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('皇冠', '百合'), '皇冠')
+            elif '木门' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('木门', '百合'), '木门')
+            elif '重瓣百合' in filtered:
+                return (VARIETY_TYPE_MAPPING.get('重瓣百合', '百合'), '重瓣百合')
+            # 大类（需在具体品种之后匹配）
+            elif '东方百合' in filtered:
+                return ('东方百合', '')
+            elif '亚洲百合' in filtered:
+                return ('亚洲百合', '')
+            elif 'OT百合' in filtered or 'OT' in filtered:
+                return ('OT百合', '')
+            elif 'LO百合' in filtered or 'LO' in filtered:
+                return ('LO百合', '')
+            elif 'LA百合' in filtered or 'LA' in filtered:
+                return ('LA百合', '')
+            elif '铁炮百合' in filtered:
+                return ('铁炮百合', '')
             elif '百合' in filtered:
-                return '百合'
-            elif '满天星' in filtered:
-                return '满天星'
-            elif '牡丹' in filtered:
-                return '牡丹'
-            elif '芍药' in filtered:
-                return '芍药'
-            elif '紫罗兰' in filtered:
-                return '紫罗兰'
-            elif '飞燕草' in filtered:
-                return '飞燕草'
-            elif '腊梅' in filtered:
-                return '腊梅'
-            elif '蝴蝶兰' in filtered:
-                return '蝴蝶兰'
-            elif '荷花' in filtered or '睡莲' in filtered:
-                return '荷花'
-            elif '鸢尾' in filtered:
-                return '鸢尾'
-            elif '洋甘菊' in filtered:
-                return '洋甘菊'
+                return ('百合', '')
+            # 郁金香品种
+            elif '重瓣郁金香' in filtered:
+                return ('重瓣郁金香', '')
+            elif '毛边郁金香' in filtered:
+                return ('毛边郁金香', '')
+            elif '鹦鹉郁金香' in filtered or '鹦鹉嘴' in filtered:
+                return ('鹦鹉郁金香', '')
+            elif '胜利之光' in filtered:
+                return ('胜利之光', '')
+            elif '世界之爱' in filtered:
+                return ('世界之爱', '')
+            elif '冰淇淋' in filtered:
+                return ('冰淇淋', '')
+            elif '白色边郁金香' in filtered:
+                return ('白色边郁金香', '')
+            elif '神秘' in filtered:
+                return ('神秘', '')
+            elif '水晶' in filtered:
+                return ('水晶', '')
+            elif '火焰' in filtered:
+                return ('火焰', '')
+            elif '郁金香' in filtered:
+                return ('郁金香', '')
+            # 绣球品种
+            elif '无尽夏' in filtered:
+                return ('无尽夏绣球', '')
+            elif '大花绣球' in filtered:
+                return ('大花绣球', '')
+            elif '重瓣绣球' in filtered:
+                return ('重瓣绣球', '')
+            elif '染色绣球' in filtered:
+                return ('染色绣球', '')
+            elif '复古绣球' in filtered:
+                return ('复古绣球', '')
+            elif '抹茶绣球' in filtered:
+                return ('抹茶绣球', '')
+            elif '妖精之吻' in filtered:
+                return ('妖精之吻', '')
+            elif '佳澄' in filtered:
+                return ('佳澄', '')
+            elif '花手鞠' in filtered:
+                return ('花手鞠', '')
+            elif '你我一起' in filtered:
+                return ('你我一起', '')
+            elif '纱织小姐' in filtered:
+                return ('纱织小姐', '')
+            elif '蒙娜丽莎' in filtered:
+                return ('蒙娜丽莎', '')
+            elif '秋色绣球' in filtered:
+                return ('秋色绣球', '')
+            elif '薄荷拇指' in filtered:
+                return ('薄荷拇指', '')
+            elif '魔幻海洋' in filtered:
+                return ('魔幻海洋', '')
+            elif '绣球' in filtered:
+                return ('绣球', '')
+            # 康乃馨品种
+            elif '多头康乃馨' in filtered:
+                return ('多头康乃馨', '')
+            elif '单头康乃馨' in filtered:
+                return ('单头康乃馨', '')
+            elif '染色康乃馨' in filtered:
+                return ('染色康乃馨', '')
+            elif '绿注康乃馨' in filtered:
+                return ('绿注康乃馨', '')
+            elif '红迪康乃馨' in filtered:
+                return ('红迪康乃馨', '')
+            elif '白康乃馨' in filtered:
+                return ('白康乃馨', '')
+            elif '粉康乃馨' in filtered:
+                return ('粉康乃馨', '')
+            elif '康乃馨' in filtered:
+                return ('康乃馨', '')
+            # 菊花品种
+            elif '乒乓菊' in filtered:
+                return ('乒乓菊', '')
+            elif '小菊' in filtered:
+                return ('小菊', '')
+            elif '大菊' in filtered:
+                return ('大菊', '')
+            elif '玛格丽特' in filtered:
+                return ('玛格丽特', '')
+            elif '格桑' in filtered:
+                return ('格桑花', '')
+            elif '非洲菊' in filtered:
+                return ('非洲菊', '')
             elif '雏菊' in filtered:
-                return '雏菊'
+                return ('雏菊', '')
+            elif '洋甘菊' in filtered:
+                return ('洋甘菊', '')
+            elif '白菊' in filtered:
+                return ('白菊', '')
+            elif '黄菊' in filtered:
+                return ('黄菊', '')
+            elif '粉菊' in filtered:
+                return ('粉菊', '')
+            elif '紫菊' in filtered:
+                return ('紫菊', '')
+            elif '绿菊' in filtered:
+                return ('绿菊', '')
+            elif '香槟菊' in filtered:
+                return ('香槟菊', '')
+            elif '单头菊' in filtered:
+                return ('单头菊', '')
+            elif '多头菊' in filtered:
+                return ('多头菊', '')
+            elif '光面菊' in filtered:
+                return ('光面菊', '')
+            elif '毛面菊' in filtered:
+                return ('毛面菊', '')
+            elif '菊花' in filtered:
+                return ('菊花', '')
+            # 秋英/波斯菊类
+            elif '巧克力秋英' in filtered or '巧克力波斯菊' in filtered or '巧克力宇宙' in filtered:
+                return ('巧克力秋英', '')
+            elif '硫华菊' in filtered:
+                return ('硫华菊', '')
+            elif '红秋英' in filtered:
+                return ('红秋英', '')
+            elif '粉秋英' in filtered:
+                return ('粉秋英', '')
+            elif '白秋英' in filtered:
+                return ('白秋英', '')
+            elif '波斯菊' in filtered:
+                return ('波斯菊', '')
+            elif '秋英' in filtered:
+                return ('秋英', '')
+            # 洋桔梗品种（优先于通用洋桔梗）
+            elif '美人鱼' in filtered:
+                return ('美人鱼', '')
+            elif '蓝利萨' in filtered:
+                return ('蓝利萨', '')
+            elif '红镜' in filtered:
+                return ('红镜', '')
+            elif '露西塔' in filtered:
+                return ('露西塔', '')
+            elif '惊艳洛丽塔' in filtered or '洛丽塔' in filtered:
+                return ('惊艳洛丽塔', '')
+            elif '维纳斯' in filtered:
+                return ('维纳斯', '')
+            elif '雅尔' in filtered:
+                return ('雅尔', '')
+            elif '三重唱' in filtered:
+                return ('三重唱', '')
+            elif '美声' in filtered:
+                return ('美声', '')
+            elif '大乐' in filtered:
+                return ('大乐', '')
+            elif '朱颜' in filtered:
+                return ('朱颜', '')
+            elif '彩风' in filtered:
+                return ('彩风', '')
+            elif '火灵鸟' in filtered:
+                return ('火灵鸟', '')
+            elif '蜜糖' in filtered:
+                return ('蜜糖', '')
+            elif '小铃铛' in filtered:
+                return ('小铃铛', '')
+            elif '罗曼' in filtered:
+                return ('罗曼', '')
+            elif '洋桔梗' in filtered:
+                return ('洋桔梗', '')
+                return ('朱颜', '')
+            elif '彩风' in filtered:
+                return ('彩风', '')
+            elif '火灵鸟' in filtered:
+                return ('火灵鸟', '')
+            elif '蜜糖' in filtered:
+                return ('蜜糖', '')
+            elif '小铃铛' in filtered:
+                return ('小铃铛', '')
+            elif '罗曼' in filtered:
+                return ('罗曼', '')
+            elif 'Maquia' in filtered or 'Rosina' in filtered:
+                return ('洋桔梗', '')  # 保留原品种名
+            elif '向日葵' in filtered:
+                return ('向日葵', '')
+            elif '洋牡丹' in filtered:
+                return ('洋牡丹', '')
+            # 满天星品种（需在满天星之前匹配）
+            elif '染色满天星' in filtered or '彩色满天星' in filtered:
+                return ('染色满天星', '')
+            elif '浪漫粉' in filtered:
+                return ('浪漫粉满天星', '')
+            elif '天空蓝' in filtered:
+                return ('天空蓝满天星', '')
+            elif '星星满天星' in filtered:
+                return ('星星满天星', '')
+            elif '玲珑满天星' in filtered:
+                return ('玲珑满天星', '')
+            elif '千万星' in filtered or '百万星' in filtered or '伊洛斯' in filtered:
+                return ('满天星', '')
+            elif '满天星' in filtered:
+                return ('满天星', '')
+            elif '牡丹' in filtered:
+                return ('牡丹', '')
+            elif '芍药' in filtered:
+                return ('芍药', '')
+            elif '紫罗兰' in filtered:
+                return ('紫罗兰', '')
+            elif '飞燕草' in filtered:
+                return ('飞燕草', '')
+            # 飞燕草品种
+            elif '大花飞燕' in filtered:
+                return ('大花飞燕', '')
+            elif '小飞燕' in filtered:
+                return ('小飞燕', '')
+            elif '千鸟草' in filtered:
+                return ('千鸟草', '')
+            elif '腊梅' in filtered:
+                return ('腊梅', '')
+            elif '虾脊兰' in filtered:
+                return ('虾脊兰', '')
+            elif '蝴蝶兰' in filtered:
+                return ('蝴蝶兰', '')
+            elif '荷花' in filtered or '睡莲' in filtered:
+                return ('荷花', '')
+            elif '鸢尾' in filtered:
+                return ('鸢尾', '')
             elif '翠珠' in filtered:
-                return '翠珠'
+                return ('翠珠', '')
             elif '蓝星花' in filtered:
-                return '蓝星花'
+                return ('蓝星花', '')
             elif '铁线莲' in filtered:
-                return '铁线莲'
+                return ('铁线莲', '')
             elif '雪柳' in filtered:
-                return '雪柳'
-            return '花材'
+                return ('雪柳', '')
+            elif '洋兰' in filtered:
+                return ('洋兰', '')
+            elif '剑兰' in filtered:
+                return ('剑兰', '')
+            elif '文心兰' in filtered:
+                return ('文心兰', '')
+            elif '熊猫文心兰' in filtered or ('熊猫' in filtered and '文心兰' in filtered):
+                return ('熊猫文心兰', '')
+            elif '跳舞兰' in filtered or '吉祥兰' in filtered or '金蝶兰' in filtered or '瘤瓣兰' in filtered or '舞女兰' in filtered:
+                # 跳舞兰别名：吉祥兰、金蝶兰、瘤瓣兰、舞女兰
+                if '熊猫' in filtered:
+                    return ('熊猫文心兰', '')
+                return ('跳舞兰', '')
+            elif '石斛兰' in filtered:
+                return ('石斛兰', '')
+            elif '桔梗' in filtered:
+                return ('桔梗', '')
+            elif '蕾丝' in filtered:
+                return ('蕾丝', '')
+            elif '龙胆' in filtered:
+                return ('龙胆', '')
+            elif '梦香兰' in filtered:
+                return ('梦香兰', '')
+            elif '跳舞兰' in filtered:
+                return ('跳舞兰', '')
+            elif '吉祥兰' in filtered:
+                return ('吉祥兰', '')
+            return ('花材', '')
+
+        elif category == '永生花/干花类型':
+            if '紫罗兰' in filtered:
+                return ('紫罗兰', '')
+            elif '满天星' in filtered:
+                return ('满天星', '')
+            # 满天星品种
+            elif '染色满天星' in filtered or '彩色满天星' in filtered:
+                return ('染色满天星', '')
+            elif '浪漫粉' in filtered:
+                return ('浪漫粉满天星', '')
+            elif '天空蓝' in filtered:
+                return ('天空蓝满天星', '')
+            elif '星星满天星' in filtered:
+                return ('星星满天星', '')
+            elif '玲珑满天星' in filtered:
+                return ('玲珑满天星', '')
+            elif '千万星' in filtered or '百万星' in filtered or '伊洛斯' in filtered:
+                return ('满天星', '')
+            elif '千日红' in filtered:
+                return ('千日红', '')
+            elif '绣球' in filtered:
+                return ('绣球', '')
+            elif '玫瑰' in filtered:
+                return ('玫瑰', '')
+            elif '蓬莱松' in filtered:
+                return ('蓬莱松', '')
+            elif '尤加利' in filtered:
+                return ('尤加利', '')
+            elif '薰衣草' in filtered:
+                return ('薰衣草', '')
+            elif '勿忘我' in filtered:
+                return ('勿忘我', '')
+            elif '情人草' in filtered:
+                return ('情人草', '')
+            elif '水晶草' in filtered:
+                return ('水晶草', '')
+            elif '猫眼' in filtered:
+                return ('猫眼', '')
+            return ('干花', '')
+
+        elif category == '鲜切叶材':
+            # 尤加利品种（注意：更具体的关键字要排在'尤加利'之前）
+            if '苹果尤加利' in filtered or '蓝梦尤加利' in filtered or '银叶尤加利' in filtered or '心叶尤加利' in filtered:
+                return ('尤加利', '')
+            elif '尤加利叶' in filtered:
+                return ('尤加利叶', '')
+            elif '尤加利' in filtered:
+                return ('尤加利', '')
+            elif '满天星叶' in filtered:
+                return ('满天星叶', '')
+            return self._extract_nonflower_product_name(filtered, category)
 
         elif category == '五金工具':
             if any(tool in filtered for tool in ['理花神器', '齿扒', '花扒', '扒子']):
-                return '理花神器'
+                return ('理花神器', '')
             elif '剪刀' in filtered:
-                return '花艺剪刀'
+                return ('花艺剪刀', '')
             elif '花泥刀' in filtered:
-                return '花泥刀'
+                return ('花泥刀', '')
             elif '打刺夹' in filtered:
-                return '打刺夹'
-            return '工具'
+                return ('打刺夹', '')
+            return self._extract_nonflower_product_name(filtered, category)
 
-        return '产品'
+        return ('产品', '')
 
     def extract_pattern(self, name: str) -> Optional[str]:
         """提取图案/款式"""
@@ -742,6 +1818,7 @@ class ItemNamingReviewer:
             'suggested_name': None,
             'category': None,
             'product_name': None,
+            'variety': None,  # 品种（如玫瑰的卡罗拉、冷美人等）
             'material': None,
             'color': None,
             'spec': {},
@@ -773,8 +1850,9 @@ class ItemNamingReviewer:
         result['spec'] = spec
 
         # 5. 提取产品名称
-        product_name = self.extract_product_name(original_name, category)
+        product_name, variety = self.extract_product_name(original_name, category)
         result['product_name'] = product_name
+        result['variety'] = variety
 
         # 6. 提取图案
         pattern = self.extract_pattern(original_name)
@@ -791,6 +1869,17 @@ class ItemNamingReviewer:
         if product_name not in category:
             parts.append(product_name)
 
+        # 玫瑰类：product_name是"单头玫瑰/多头玫瑰"，variety是具体品种（如卡罗拉）
+        # 需要同时添加product_name和variety
+        if variety:
+            parts.append(variety)
+        # 非玫瑰的鲜切花材：增加种属（如"菊花"）
+        elif category == '鲜切花材':
+            if product_name in self.spec_species_category:
+                species = self.spec_species_category[product_name]
+                if species != product_name:  # 避免重复
+                    parts.append(species)
+
         if pattern:
             parts.append(pattern)
 
@@ -803,6 +1892,8 @@ class ItemNamingReviewer:
         # 添加规格
         if 'size_name' in spec:
             parts.append(spec['size_name'])
+            if 'size' in spec:
+                parts.append(spec['size'])
         elif 'size' in spec:
             parts.append(spec['size'])
 
@@ -810,11 +1901,17 @@ class ItemNamingReviewer:
             parts.append(spec['inch'])
 
         if 'grade' in spec and 'quantity' in spec:
-            parts.append(f"{spec['grade']}-{spec['quantity']}")
+            qty = spec.get('std_quantity', spec['quantity'])
+            parts.append(f"{spec['grade']}-{qty}")
         elif 'grade' in spec:
             parts.append(spec['grade'])
         elif 'quantity' in spec:
-            parts.append(spec['quantity'])
+            qty = spec.get('std_quantity', spec['quantity'])
+            parts.append(qty)
+
+        # 添加换算说明（如有）
+        if 'conversion_note' in spec:
+            result['conversion_note'] = spec['conversion_note']
 
         if 'volume' in spec:
             parts.append(spec['volume'])
@@ -824,6 +1921,12 @@ class ItemNamingReviewer:
 
         if 'pack' in spec:
             parts.append(spec['pack'])
+
+        if 'attribute' in spec:
+            parts.append(spec['attribute'])
+
+        if 'weight_per' in spec:
+            parts.append(spec['weight_per'])
 
         result['suggested_name'] = '-'.join(parts)
 
@@ -840,7 +1943,7 @@ class ItemNamingReviewer:
 
         output = []
         output.append("=" * 70)
-        output.append("花店物品命名审查结果 v2.0")
+        output.append("花店物品命名审查结果 v2.12")
         output.append("=" * 70)
         output.append(f"原始名称: {result['original_name']}")
         output.append(f"来源平台: {result['platform']}")
@@ -852,6 +1955,40 @@ class ItemNamingReviewer:
         output.append(f"规格信息: {result['spec'] or '(未识别)'}")
         output.append("-" * 70)
         output.append(f"✅ 建议命名: {result['suggested_name']}")
+        if result.get('conversion_note'):
+            output.append(f"🔄 单位换算: {result['conversion_note']}")
+        # 多等级建议
+        spec = result.get('spec', {})
+        if spec.get('multi_grades'):
+            grades = spec['multi_grades']
+            product_name = result.get('product_name', '')
+            variety = result.get('variety', '')
+            color = result.get('color', '')
+            weight_per = spec.get('weight_per', '')
+            quantity = spec.get('quantity', '')  # 添加数量
+            # 构建品名部分：鲜切花材-产品名-种属-颜色
+            # 玫瑰类：product_name是"单头玫瑰/多头玫瑰"，variety是具体品种
+            name_parts = [product_name]
+            if variety:
+                name_parts.append(variety)
+            elif product_name in SPECIES_CATEGORY:
+                species = SPECIES_CATEGORY[product_name]
+                if species and species != product_name:
+                    name_parts.append(species)
+            if color:
+                name_parts.append(color)
+            name_base = '-'.join(name_parts)
+            # 组合规格：等级-数量-单位（如有重量单位则加重量）
+            spec_part = f"{quantity}" if quantity else ''
+            if weight_per:
+                spec_part = f"{spec_part}-{weight_per}" if spec_part else weight_per
+            suggestions = []
+            for g in grades:
+                grade_part = f"{g}级"
+                suggestions.append(f"鲜切花材-{name_base}-{grade_part}-{spec_part}" if spec_part else f"鲜切花材-{name_base}-{grade_part}")
+            output.append(f"📋 多规格品项建议: 建议分别为以下等级建立独立品项")
+            for s in suggestions:
+                output.append(f"   • {s}")
         output.append("-" * 70)
 
         # 单位建议
@@ -894,13 +2031,15 @@ class ItemNamingReviewer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='花店物品命名审查工具 v2.0',
+        description='花店物品命名审查工具 v2.19',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
   python3 item_naming_cli.py "鲜花喷漆花艺彩色碎冰蓝花束喷色剂 规格型号: 碎冰蓝;450ml"
   python3 item_naming_cli.py "单头玫瑰-戴安娜-红色-C级-20支/扎" --platform huawu
-  python3 item_naming_cli.py "北欧陶瓷摆件青釉知花" --json
+  python3 item_naming_cli.py "玛格丽特（白）ABCDE级300g/扎" --copy
+  python3 item_naming_cli.py "卡罗拉玫瑰" --no-cache    # 直接从 Notion 获取
+  python3 item_naming_cli.py "卡罗拉玫瑰" --force-refresh  # 强制刷新缓存
         """
     )
     parser.add_argument('name', help='商品原始名称')
@@ -908,13 +2047,64 @@ def main():
                         help='指定来源平台')
     parser.add_argument('--json', '-j', action='store_true',
                         help='输出JSON格式')
+    parser.add_argument('--copy', '-c', action='store_true',
+                        help='简洁输出，仅显示可复制的命名结果')
+    parser.add_argument('--no-cache', action='store_true',
+                        help='跳过缓存，直接从 Notion 获取最新数据')
+    parser.add_argument('--force-refresh', action='store_true',
+                        help='强制刷新缓存')
 
     args = parser.parse_args()
 
-    reviewer = ItemNamingReviewer()
+    # 尝试从 Notion 加载数据
+    notion_data = None
+    if args.no_cache or args.force_refresh:
+        try:
+            # 延迟导入避免循环依赖
+            from notion_client import load_data
+            notion_data = load_data(
+                use_cache=not args.no_cache,
+                force_refresh=args.force_refresh
+            )
+            if notion_data:
+                print("📦 已从 Notion 加载数据")
+        except Exception as e:
+            print(f"⚠️ 从 Notion 加载数据失败: {e}")
+            print("   将使用内置默认数据")
+
+    reviewer = ItemNamingReviewer(notion_data=notion_data)
 
     if args.json:
         print(reviewer.to_json(args.name, args.platform))
+    elif args.copy:
+        result = reviewer.generate_standard_name(args.name, args.platform)
+        spec = result.get('spec', {})
+        # 主命名
+        print(result['suggested_name'])
+        # 多规格品项
+        if spec.get('multi_grades'):
+            grades = spec['multi_grades']
+            product_name = result.get('product_name', '')
+            variety = result.get('variety', '')
+            color = result.get('color', '')
+            weight_per = spec.get('weight_per', '')
+            quantity = spec.get('quantity', '')
+            name_parts = [product_name]
+            if variety:
+                name_parts.append(variety)
+            elif product_name in SPECIES_CATEGORY:
+                species = SPECIES_CATEGORY[product_name]
+                if species and species != product_name:
+                    name_parts.append(species)
+            if color:
+                name_parts.append(color)
+            name_base = '-'.join(name_parts)
+            spec_part = f"{quantity}" if quantity else ''
+            if weight_per:
+                spec_part = f"{spec_part}-{weight_per}" if spec_part else weight_per
+            for g in grades:
+                grade_part = f"{g}级"
+                print(f"鲜切花材-{name_base}-{grade_part}-{spec_part}" if spec_part else f"鲜切花材-{name_base}-{grade_part}")
     else:
         print(reviewer.review(args.name, args.platform))
 
